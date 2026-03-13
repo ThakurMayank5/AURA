@@ -37,10 +37,9 @@ func sendCommand(command string) {
 	commandsMutex.Unlock()
 }
 
-func ESPWSHandler(c *gin.Context) {
+var aiServerConnMutex = sync.Mutex{}
 
-	file, _ := os.Create("audio.raw")
-	defer file.Close()
+func ESPWSHandler(c *gin.Context) {
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -79,7 +78,16 @@ func ESPWSHandler(c *gin.Context) {
 
 		commandsMutex.Unlock()
 
-		file.Write(data)
+		if aiServerConn != nil {
+			aiServerConnMutex.Lock()
+			err := aiServerConn.WriteMessage(websocket.BinaryMessage, data)
+			aiServerConnMutex.Unlock()
+
+			if err != nil {
+				log.Println("Error sending to AI Server:", err)
+			}
+		}
+
 	}
 
 }
@@ -88,12 +96,17 @@ var aiServerConn *websocket.Conn
 
 func AIServerWSHandler(c *gin.Context) {
 
+	fmt.Println("AI Server attempting to connect")
+
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 
 	if err != nil {
 		log.Println("Upgrade error:", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upgrade to WebSocket"})
 		return
 	}
+
+	fmt.Println("AI Server connected")
 
 	aiServerConn = conn
 
@@ -105,7 +118,20 @@ func AIServerWSHandler(c *gin.Context) {
 
 	fmt.Println("AI Server connected")
 
-	conn.WriteMessage(websocket.TextMessage, []byte("light:true"))
+	// conn.WriteMessage(websocket.TextMessage, []byte("light:true"))
+
+	for {
+		msgType, data, err := conn.ReadMessage()
+		if err != nil {
+			log.Println("Read error:", err)
+			break
+		}
+
+		if msgType == websocket.TextMessage {
+			fmt.Println("Received command from AI Server:", string(data))
+		}
+
+	}
 
 }
 
@@ -128,6 +154,8 @@ func wsHandler(c *gin.Context) {
 	}
 
 	if connectionHash == AI_SERVER_HASH {
+
+		fmt.Println("AI Server attempting to connect")
 
 		AIServerWSHandler(c)
 
